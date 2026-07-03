@@ -1,0 +1,9 @@
+# Core dependencies
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# OpenVINO for model inference
+openvino>=2024.0.0
+
+# Physical AI SDK for LeRobot SO101 arm
+physicalai>=0.1.0
