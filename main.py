@@ -11,10 +11,11 @@ Reads from:
 import cv2
 import numpy as np
 import time
+import threading
 from pathlib import Path
 
-from .act_model import ACTModelInference
-from .lerobot_arm_controller import LeRobotArmController
+from act_model import ACTModelInference
+from lerobot_arm_controller import LeRobotArmController
 
 
 class CameraManager:
@@ -40,13 +41,32 @@ class CameraManager:
             self.cameras[name] = cap
             print(f"✓ Opened camera '{name}' at /dev/video{device_id}")
 
-    def read_frames(self):
-        """Read frames from all cameras"""
+    def read_frames(self, timeout=1.0):
+        """Read frames from all cameras with timeout"""
         frames = {}
+
         for name, cap in self.cameras.items():
-            ret, frame = cap.read()
+            # Use threading to implement timeout
+            result = [None, None]  # [ret, frame]
+
+            def read_with_timeout():
+                result[0], result[1] = cap.read()
+
+            thread = threading.Thread(target=read_with_timeout)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=timeout)
+
+            if thread.is_alive():
+                # Timeout occurred
+                print(f"Warning: Camera '{name}' read timeout after {timeout}s")
+                return None
+
+            ret, frame = result
             if not ret:
-                raise RuntimeError(f"Failed to read from camera '{name}'")
+                print(f"Warning: Camera '{name}' read failed")
+                return None
+
             frames[name] = frame
         return frames
 
@@ -70,12 +90,12 @@ def main():
         'head': 2,    # RealSense 435i RGB (video1, not video0!)
     }
 
-    ROBOT_PORT = '/dev/ttyACM1'
+    ROBOT_PORT = '/dev/ttyACM2'
     MODEL_PATH = 'openvino'  # Relative to pipeline/ directory
 
     # Control parameters
     ACTION_CHUNK_SIZE = 100  # Execute first N actions from prediction
-    CONTROL_FREQUENCY = 30  # Hz
+    CONTROL_FREQUENCY = 10  # Hz
 
     print("=" * 60)
     print("ACT Inference Pipeline - LeRobot Cube Picking")
@@ -90,7 +110,7 @@ def main():
         robot = LeRobotArmController(port=ROBOT_PORT)
 
         print("\n[3/3] Loading ACT model...")
-        model = ACTModelInference(MODEL_PATH, device='CPU')
+        model = ACTModelInference(MODEL_PATH, device='NPU')
 
         print("\n" + "=" * 60)
         print("✓ System ready! Starting inference loop...")
@@ -101,32 +121,55 @@ def main():
         action_queue = []
         step_count = 0
 
+        robot.connect()
+
         while True:
             loop_start = time.time()
 
-            # Read camera frames
-            frames = cameras.read_frames()
+            # Read camera frames with timeout
+            t0 = time.time()
+            frames = cameras.read_frames(timeout=0.5)  # 500ms timeout per camera
+            t_camera = (time.time() - t0) * 1000  # ms
+
+            # Skip this iteration if camera read failed/timeout
+            if frames is None:
+                print("Warning: Camera read failed or timeout, skipping iteration")
+                time.sleep(0.01)  # Brief pause before retry
+                continue
 
             # Read current robot state
+            t0 = time.time()
             positions = robot.read_joint_positions()
+            t_robot_read = (time.time() - t0) * 1000  # ms
+
+            # Skip this iteration if robot read failed
+            if positions is None:
+                print("Warning: Failed to read robot state, skipping iteration")
+                continue
 
             # Run inference every time action queue is empty
             if len(action_queue) == 0:
                 print(f"\n[Step {step_count}] Running inference...")
-                print(f"  Current state: {current_state}")
+                print(f"  Current state: {positions}")
 
                 # Predict action sequence
+                t0 = time.time()
                 actions = model.infer(positions, frames)
+                t_inference = (time.time() - t0) * 1000  # ms
 
                 # Queue first N actions
                 action_queue = list(actions[:ACTION_CHUNK_SIZE])
                 print(f"  Predicted {len(actions)} actions, queued {len(action_queue)}")
+                print(f"  Timing: camera={t_camera:.1f}ms, robot_read={t_robot_read:.1f}ms, inference={t_inference:.1f}ms")
 
             # Execute next action
             if action_queue:
+                t0 = time.time()
                 next_action = action_queue.pop(0)
-                print(f"  Executing action {ACTION_CHUNK_SIZE - len(action_queue)}/{ACTION_CHUNK_SIZE}: {next_action}")
                 robot.send_joint_positions(next_action)
+                time.sleep(0.001)
+                t_robot_write = (time.time() - t0) * 1000  # ms
+                #print(f"  Executing action {ACTION_CHUNK_SIZE - len(action_queue)}/{ACTION_CHUNK_SIZE} [took {t_robot_write:.1f}ms]")
 
             step_count += 1
 
@@ -135,9 +178,10 @@ def main():
             sleep_time = max(0, (1.0 / CONTROL_FREQUENCY) - elapsed)
             time.sleep(sleep_time)
 
-            # Show FPS
+            # Show FPS and timing
+            total_time = (elapsed + sleep_time) * 1000  # ms
             actual_freq = 1.0 / (elapsed + sleep_time)
-            print(f"  Frequency: {actual_freq:.1f} Hz", end='\r')
+            #print(f"  Loop: {total_time:.1f}ms ({actual_freq:.1f} Hz) | camera={t_camera:.1f}ms robot={t_robot_read:.1f}ms", end='\r')
 
     except KeyboardInterrupt:
         print("\n\nStopping pipeline...")
@@ -153,7 +197,7 @@ def main():
         if 'cameras' in locals():
             cameras.close()
         if 'robot' in locals():
-            robot.close()
+            robot.disconnect()
         print("✓ Done")
 
 

@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+import time
+from pathlib import Path
 
 try:
     from openvino import Core  # OpenVINO 2024+
@@ -56,15 +58,46 @@ class ACTModelInference:
         return chw
 
     def infer(self, state, images_dict):
-        inputs = {
-            'state': state.reshape(1, 6).astype(np.float32),
-            'images.top': self.preprocess_image(images_dict['top']).reshape(1, 3, 384, 384),
-            'images.front': self.preprocess_image(images_dict['front']).reshape(1, 3, 384, 384),
-            'images.head': self.preprocess_image(images_dict['head']).reshape(1, 3, 384, 384),
-        }
+        t_start = time.time()
 
+        # Validate inputs
+        if state is None:
+            raise ValueError("state cannot be None")
+        required_keys = ['top', 'front', 'head']
+        missing_keys = [k for k in required_keys if k not in images_dict]
+        if missing_keys:
+            raise ValueError(f"Missing required camera images: {missing_keys}")
+
+        # Build inputs dict - dynamically match port names to image keys
+        t0 = time.time()
+        inputs = {}
+
+        # Add state input
+        for port_name in self.input_ports.keys():
+            if 'state' in port_name.lower():
+                inputs[port_name] = state.reshape(1, 6).astype(np.float32)
+                break
+
+        # Add image inputs - map model port names to our camera names
+        for port_name in self.input_ports.keys():
+            port_lower = port_name.lower()
+            if 'top' in port_lower:
+                inputs[port_name] = self.preprocess_image(images_dict['top']).reshape(1, 3, 384, 384)
+            elif 'front' in port_lower:
+                inputs[port_name] = self.preprocess_image(images_dict['front']).reshape(1, 3, 384, 384)
+            elif 'head' in port_lower or 'wrist' in port_lower:
+                inputs[port_name] = self.preprocess_image(images_dict['head']).reshape(1, 3, 384, 384)
+
+        t_preprocess = (time.time() - t0) * 1000  # ms
+
+        # Run inference
+        t0 = time.time()
         result = self.compiled_model(inputs)
         actions = result[self.output_port]
+        t_model = (time.time() - t0) * 1000  # ms
+
+        t_total = (time.time() - t_start) * 1000  # ms
+        print(f"    [Inference breakdown] preprocess={t_preprocess:.1f}ms, model={t_model:.1f}ms, total={t_total:.1f}ms")
 
         # Shape should be (1, 100, 6), squeeze batch dimension
         return actions.squeeze(0)

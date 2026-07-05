@@ -1,5 +1,7 @@
 import json
 import os
+import numpy as np
+import threading
 from physicalai.robot.so101 import SO101, SO101Calibration
 from physicalai.robot.interface import Robot, RobotObservation
 
@@ -32,47 +34,74 @@ class LeRobotArmController:
 
         self._robot = SO101(port=port, calibration=so101_cal, role="follower", unit="normalized")
 
-    def read_joint_positions(self):
-        try:
-            # Get observation (includes motor positions)
-            obs = self._robot.get_observation()
+    def read_joint_positions(self, timeout=0.5):
+        """Read joint positions with timeout"""
+        result = [None]  # Store result
+        error = [None]   # Store error
 
-            if False:
-                positions: dict[str, float] = {}
-                for i, name in enumerate(self._robot.joint_names):
-                    raw_position = float(obs.joint_positions[i])
-                    positions[f"{name}.pos"] = raw_position
+        def read_with_timeout():
+            try:
+                obs = self._robot.get_observation()
+                joint_positions = np.array(obs.joint_positions, dtype=np.float32)
+                result[0] = joint_positions
+            except Exception as e:
+                error[0] = e
 
-            return obs
+        thread = threading.Thread(target=read_with_timeout)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=timeout)
 
-        except Exception as e:
-            print(f"Error reading joint positions: {e}")
+        if thread.is_alive():
+            print(f"Warning: Robot read timeout after {timeout}s")
             return None
 
+        if error[0] is not None:
+            print(f"Error reading joint positions: {error[0]}")
+            return None
 
-    def send_joint_positions(self, positions):
-        """
-        Send target joint positions to the arm.
+        return result[0]
 
-        Args:
-            positions: np.array of shape (6,) with normalized positions
-        """
+
+    def send_joint_positions(self, positions, timeout=0.5):
+        """Send joint positions with timeout"""
+        error = [None]
+
+        def send_with_timeout():
+            try:
+                if len(positions) != 6:
+                    raise ValueError(f"Expected 6 positions, got {len(positions)}")
+
+                self._robot.send_action(positions)
+            except Exception as e:
+                error[0] = e
+
+        thread = threading.Thread(target=send_with_timeout)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            print(f"Warning: Robot send timeout after {timeout}s")
+            return False
+
+        if error[0] is not None:
+            print(f"Error sending joint positions: {error[0]}")
+            return False
+
+        return True
+
+    def connect(self):
         try:
-            if len(positions) != 6:
-                raise ValueError(f"Expected 6 positions, got {len(positions)}")
-
-            if False:
-                action = {f"{motor}.pos": float(pos) for motor, pos in zip(self.MOTOR_NAMES, positions)}
-
-            self._robot.send_action(positions)
-
+            self._robot.connect()
+            print("✓ Robot connected")
         except Exception as e:
-            print(f"Error sending joint positions: {e}")
+            print(f"Error connecting: {e}")
 
-    def close(self):
-        """Disconnect from robot"""
+    def disconnect(self):
         try:
-            self.robot.disconnect()
+            self._robot.disconnect()
             print("✓ Robot disconnected")
         except Exception as e:
             print(f"Error disconnecting: {e}")
+
