@@ -69,7 +69,7 @@ async def main_async():
             await asyncio.sleep(1)  # sleep for camera warmup
 
         # initialize robot
-        ROBOT_PORT = '/dev/ttyACM2'
+        ROBOT_PORT = '/dev/ttyACM1'
         robot = LeRobotArmController(port=ROBOT_PORT)
         robot.connect()
 

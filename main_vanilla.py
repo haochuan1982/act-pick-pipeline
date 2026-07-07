@@ -28,7 +28,7 @@ def main():
         'head': 8,
     }
 
-    ROBOT_PORT = '/dev/ttyACM2'
+    ROBOT_PORT = '/dev/ttyACM1'
     MODEL_PATH = 'openvino'
 
     # Control parameters
@@ -52,11 +52,13 @@ def main():
         print("\n[2/3] Connecting to robot arm...")
         robot_config = SO101FollowerConfig(
             port=ROBOT_PORT,
+            id="robot_calibration",  # Will look for robot_calibration.json
+            calibration_dir=Path("."),  # Current directory
             max_relative_target=None,
             use_degrees=True
         )
         robot = SO101Follower(robot_config)
-        robot.connect(calibrate=True)  # Skip calibration if already calibrated
+        robot.connect(calibrate=False)  # Use existing calibration file
 
         print("\n[3/3] Loading ACT model...")
         model = ACTModelInference(MODEL_PATH, device='NPU')
