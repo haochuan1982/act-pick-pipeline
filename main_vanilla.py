@@ -13,8 +13,9 @@ from collections import deque
 
 from ActModel import ACTModelInference
 from CameraManager import CameraManager
-from lerobot_arm_controller import LeRobotArmController
 from async_inference import AsyncInference
+
+from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
 
 def main():
@@ -49,8 +50,13 @@ def main():
         time.sleep(0.5)  # Let camera threads start
 
         print("\n[2/3] Connecting to robot arm...")
-        robot = LeRobotArmController(port=ROBOT_PORT)
-        robot.connect()
+        robot_config = SO101FollowerConfig(
+            port=ROBOT_PORT,
+            max_relative_target=None,
+            use_degrees=True
+        )
+        robot = SO101Follower(robot_config)
+        robot.connect(calibrate=True)  # Skip calibration if already calibrated
 
         print("\n[3/3] Loading ACT model...")
         model = ACTModelInference(MODEL_PATH, device='NPU')
@@ -104,11 +110,14 @@ def main():
 
             # Read current robot state
             t0 = time.time()
-            positions = robot.read_joint_positions(timeout=0.1)
-            t_robot_read = (time.time() - t0) * 1000
-
-            if positions is None:
-                print("Warning: Robot read failed, skipping iteration")
+            try:
+                observation = robot.get_observation()
+                # Extract position values from observation dict (keys like "shoulder_pan.pos", etc.)
+                motor_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+                positions = np.array([observation[f"{motor}.pos"] for motor in motor_names], dtype=np.float32)
+                t_robot_read = (time.time() - t0) * 1000
+            except Exception as e:
+                print(f"Warning: Robot read failed: {e}")
                 time.sleep(0.01)
                 continue
 
@@ -125,11 +134,15 @@ def main():
 
             # Execute action
             t0 = time.time()
-            success = robot.send_joint_positions(action, timeout=0.1)
-            t_robot_write = (time.time() - t0) * 1000
-
-            if not success:
-                print("Warning: Robot write failed")
+            try:
+                # Convert action array to RobotAction dict format
+                motor_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+                action_dict = {f"{motor}.pos": float(action[i]) for i, motor in enumerate(motor_names)}
+                robot.send_action(action_dict)
+                t_robot_write = (time.time() - t0) * 1000
+            except Exception as e:
+                print(f"Warning: Robot write failed: {e}")
+                t_robot_write = 0
 
             step_count += 1
 
