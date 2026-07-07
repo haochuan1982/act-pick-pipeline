@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
+import queue
+import threading
 import asyncio
 import time
 import numpy as np
 from pathlib import Path
-from collections import deque
 from collections import deque
 
 from lerobot_arm_controller import LeRobotArmController
@@ -15,6 +16,8 @@ from AsyncInference import AsyncInference
 from physicalai.capture import SharedCamera
 from physicalai.capture.errors import CaptureError
 #from physicalai.data import Observation
+
+debug = True
 
 async def main_async():    
     print("=" * 60)
@@ -79,13 +82,31 @@ async def main_async():
         }
         inference_model = load_inference_model(MODEL_CONFIG)
 
-        # Create async inference handler with callback
-        def inference_callback(inputs):
-            """Callback for async inference - uses physicalai InferenceModel"""
-            output = inference_model.select_action(inputs)
-            return output
+        # initialize async inference handler
+        result_queue = queue.Queue()
+        current_inputs = {}
+        inference_busy = [False]  # Use list to allow modification in lambda
 
-        async_inference = AsyncInference(inference_callback)
+        CONTROL_FREQUENCY = 30  # Hz
+        ACTION_QUEUE_THRESHOLD = 2
+
+        def run_inference():
+            """Run inference and add actions to queue"""
+            if result_queue.qsize() < ACTION_QUEUE_THRESHOLD and not inference_busy[0] and current_inputs:
+
+                inference_busy[0] = True
+                t0 = time.time()
+
+                actions = inference_model.predict_action_chunk(current_inputs.copy())
+                inference_time = (time.time() - t0) * 1000
+
+                for action in actions:
+                    result_queue.put(action)
+
+                debug and print(f"Inference time: {inference_time:.1f}ms, added {len(actions)} actions, new queue size: {result_queue.qsize()}")
+                inference_busy[0] = False
+
+        async_inference = AsyncInference(run_inference)
 
         # run pipeline
         print("\n" + "=" * 60)
@@ -93,36 +114,36 @@ async def main_async():
         print("Press Ctrl+C to stop")
         print("=" * 60 + "\n")
 
-        ACTION_CHUNK_SIZE = 100
-        CONTROL_FREQUENCY = 10  # Hz
-        action_queue = deque()
+        step_count = 0
 
-        for i in range(2):
-            # Prepare inputs
+        while True:
+            loop_start = time.time()
             inputs = {}
+
             obs = robot.read_joint_positions()
             inputs['state'] = obs[np.newaxis]  # Add batch dimension: [6] -> [1, 6]
             for cam_name, cam in frame_captures.items():
                 frame = cam.read_latest()
                 inputs[cam_name] = np.ascontiguousarray(frame.data[..., ::-1].transpose(2, 0, 1).astype(np.float32)[np.newaxis] / 255)
 
-            # Request async inference
-            async_inference.request_inference(inputs)
+            current_inputs = inputs
 
-            # Wait for result (for testing - in production you'd do this differently)
-            result = None
-            while result is None:
-                result = async_inference.get_result()
-                if result is None:
-                    await asyncio.sleep(0.01)
+            try:
+                action = result_queue.get(timeout=1.0)
+            except queue.Empty:
+                print("Warning: No action available, skipping iteration")
+                await asyncio.sleep(0.01)
+                continue
 
-            output, inference_time = result
-            print(f"Inference completed in {inference_time:.1f}ms, output: {output}")
+            robot.send_joint_positions(action)
 
-            # TODO: Execute actions on robot
-            # robot.send_joint_positions(output)
+            step_count += 1
+            if debug and step_count % 30 == 0:  # Print every 1 second
+                print(f"[Step {step_count}] Action queue size: {result_queue.qsize()}")
 
-            time.sleep(1.0 / 30)
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, (1.0 / CONTROL_FREQUENCY) - elapsed)
+            await asyncio.sleep(sleep_time)
 
     except KeyboardInterrupt:
         print("\n\nStopping pipeline...")
