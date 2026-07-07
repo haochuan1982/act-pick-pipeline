@@ -6,6 +6,8 @@ Vanilla version with OpenCV-based camera management
 
 import numpy as np
 import time
+import queue
+import threading
 from pathlib import Path
 from collections import deque
 
@@ -20,9 +22,9 @@ def main():
 
     # Configuration
     CAMERA_MAPPING = {
-        'top': 8,
+        'top': 2,
         'front': 6,
-        'head': 2,
+        'head': 8,
     }
 
     ROBOT_PORT = '/dev/ttyACM2'
@@ -51,16 +53,33 @@ def main():
         robot.connect()
 
         print("\n[3/3] Loading ACT model...")
-        model = ACTModelInference(MODEL_PATH, device='CPU')
+        model = ACTModelInference(MODEL_PATH, device='NPU')
 
-        # Create async inference handler with callback
-        def inference_callback(inputs):
-            """Callback for async inference"""
-            state, images = inputs
-            actions = model.infer(state, images)
-            return actions
+        # Initialize result queue and shared state
+        result_queue = queue.Queue()
+        current_inputs = {}
+        inference_busy = [False]
 
-        async_inference = AsyncInference(inference_callback)
+        ACTION_QUEUE_THRESHOLD = 3  # Trigger when queue has fewer than 3 actions
+
+        def run_inference():
+            """Run inference and add actions to queue"""
+            if result_queue.qsize() < ACTION_QUEUE_THRESHOLD and not inference_busy[0] and current_inputs:
+                inference_busy[0] = True
+                t0 = time.time()
+
+                state, images = current_inputs['state'], current_inputs['images']
+                actions = model.infer(state, images)
+                inference_time = (time.time() - t0) * 1000
+
+                # Add actions to result queue
+                for action in actions:
+                    result_queue.put(action)
+
+                print(f"Inference: {inference_time:.1f}ms, added {len(actions)} actions, queue size: {result_queue.qsize()}")
+                inference_busy[0] = False
+
+        async_inference = AsyncInference(run_inference)
 
         print("\n" + "=" * 60)
         print("✓ System ready! Starting inference loop...")
@@ -68,10 +87,7 @@ def main():
         print("=" * 60 + "\n")
 
         # Main control loop
-        action_queue = deque()
         step_count = 0
-        inference_pending = False
-        last_inference_time = 0
 
         while True:
             loop_start = time.time()
@@ -96,30 +112,24 @@ def main():
                 time.sleep(0.01)
                 continue
 
-            # Check for inference result
-            result = async_inference.get_result()
-            if result is not None:
-                actions, inference_time = result
-                action_queue = deque(actions[:ACTION_CHUNK_SIZE])
-                inference_pending = False
-                print(f"\n[Step {step_count}] Inference complete: {inference_time:.1f}ms")
-                print(f"  Queued {len(action_queue)} actions")
+            # Update current inputs for inference
+            current_inputs = {'state': positions, 'images': frames}
 
-            # Request new inference if queue is low and no inference pending
-            if len(action_queue) < 3 and not inference_pending:
-                if async_inference.request_inference((positions, frames)):
-                    inference_pending = True
-                    print(f"  Requested new inference (queue size: {len(action_queue)})")
+            # Get action from result queue (non-blocking)
+            try:
+                action = result_queue.get(timeout=0.1)
+            except queue.Empty:
+                print("Warning: No action available, skipping iteration")
+                time.sleep(0.01)
+                continue
 
-            # Execute next action
-            if action_queue:
-                t0 = time.time()
-                next_action = action_queue.popleft()
-                success = robot.send_joint_positions(next_action, timeout=0.1)
-                t_robot_write = (time.time() - t0) * 1000
+            # Execute action
+            t0 = time.time()
+            success = robot.send_joint_positions(action, timeout=0.1)
+            t_robot_write = (time.time() - t0) * 1000
 
-                if not success:
-                    print("Warning: Robot write failed")
+            if not success:
+                print("Warning: Robot write failed")
 
             step_count += 1
 
@@ -129,14 +139,13 @@ def main():
             time.sleep(sleep_time)
 
             # Show status
-            total_time = (elapsed + sleep_time) * 1000
-            actual_freq = 1.0 / (elapsed + sleep_time)
-            status = f"Loop: {total_time:.1f}ms ({actual_freq:.1f}Hz) | "
-            status += f"cam:{t_camera:.1f}ms robot:{t_robot_read:.1f}ms | "
-            status += f"queue:{len(action_queue)} "
-            if inference_pending:
-                status += "[INF]"
-            print(status, end='\r')
+            if step_count % 30 == 0:  # Print every 1 second
+                total_time = (elapsed + sleep_time) * 1000
+                actual_freq = 1.0 / (elapsed + sleep_time)
+                status = f"[Step {step_count}] Loop: {total_time:.1f}ms ({actual_freq:.1f}Hz) | "
+                status += f"cam:{t_camera:.1f}ms robot:{t_robot_read:.1f}ms | "
+                status += f"queue:{result_queue.qsize()}"
+                print(status)
 
     except KeyboardInterrupt:
         print("\n\nStopping pipeline...")
