@@ -11,7 +11,7 @@ from collections import deque
 from lerobot_arm_controller import LeRobotArmController
 from camera_utils import build_shared_camera
 from model_utils import load_inference_model
-from AsyncInference import AsyncInference
+from async_inference import AsyncInference
 
 from physicalai.capture import SharedCamera
 from physicalai.capture.errors import CaptureError
