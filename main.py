@@ -88,7 +88,7 @@ async def main_async():
         inference_busy = [False]  # Use list to allow modification in lambda
 
         CONTROL_FREQUENCY = 30  # Hz
-        ACTION_QUEUE_THRESHOLD = 2
+        ACTION_QUEUE_THRESHOLD = 1
 
         def run_inference():
             """Run inference and add actions to queue"""
