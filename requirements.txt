@@ -8,3 +8,4 @@ openvino>=2024.0.0
 # Physical AI SDK for LeRobot SO101 arm
 physicalai>=0.1.0
 feetech-servo-sdk
+iceoryx2==0.9.0

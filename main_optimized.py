@@ -14,6 +14,7 @@ from collections import deque
 
 from act_model import ACTModelInference
 from lerobot_arm_controller import LeRobotArmController
+from AsyncInference import AsyncInference
 
 
 class CameraManager:
@@ -117,68 +118,6 @@ class CameraManager:
             cap.release()
 
 
-class AsyncInference:
-    """Runs model inference in background thread"""
-
-    def __init__(self, model):
-        self.model = model
-        self.inference_queue = queue.Queue(maxsize=1)
-        self.result_queue = queue.Queue(maxsize=1)
-        self.running = True
-
-        self.thread = threading.Thread(target=self._inference_loop)
-        self.thread.daemon = True
-        self.thread.start()
-
-    def _inference_loop(self):
-        """Background thread for inference"""
-        while self.running:
-            try:
-                state, images = self.inference_queue.get(timeout=0.1)
-
-                t0 = time.time()
-                actions = self.model.infer(state, images)
-                inference_time = (time.time() - t0) * 1000
-
-                # Put result (discard old if exists)
-                try:
-                    self.result_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                self.result_queue.put((actions, inference_time))
-
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"Inference error: {e}")
-                import traceback
-                traceback.print_exc()
-
-    def request_inference(self, state, images):
-        """Request inference (non-blocking, discards old request)"""
-        try:
-            # Clear old request
-            try:
-                self.inference_queue.get_nowait()
-            except queue.Empty:
-                pass
-            # Add new request
-            self.inference_queue.put_nowait((state, images))
-            return True
-        except queue.Full:
-            return False
-
-    def get_result(self):
-        """Get inference result if ready (non-blocking)"""
-        try:
-            return self.result_queue.get_nowait()
-        except queue.Empty:
-            return None
-
-    def stop(self):
-        self.running = False
-
-
 def main():
     """Main inference loop"""
 
@@ -217,8 +156,14 @@ def main():
         print("\n[3/3] Loading ACT model...")
         model = ACTModelInference(MODEL_PATH, device='CPU')
 
-        # Create async inference handler
-        async_inference = AsyncInference(model)
+        # Create async inference handler with callback
+        def inference_callback(inputs):
+            """Callback for async inference"""
+            state, images = inputs
+            actions = model.infer(state, images)
+            return actions
+
+        async_inference = AsyncInference(inference_callback)
 
         print("\n" + "=" * 60)
         print("✓ System ready! Starting inference loop...")
@@ -265,7 +210,7 @@ def main():
 
             # Request new inference if queue is low and no inference pending
             if len(action_queue) < 3 and not inference_pending:
-                if async_inference.request_inference(positions, frames):
+                if async_inference.request_inference((positions, frames)):
                     inference_pending = True
                     print(f"  Requested new inference (queue size: {len(action_queue)})")
 
