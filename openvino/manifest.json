@@ -56,7 +56,7 @@
             480,
             640
           ],
-          "name": "images.front",
+          "name": "images.head",
           "dtype": "float32"
         }
       },
@@ -69,7 +69,20 @@
             480,
             640
           ],
-          "name": "images.header",
+          "name": "images.right",
+          "dtype": "float32"
+        }
+      },
+      {
+        "class_path": "physicalai.inference.data.features.InferenceFeature",
+        "init_args": {
+          "ftype": "VISUAL",
+          "shape": [
+            3,
+            480,
+            640
+          ],
+          "name": "images.left",
           "dtype": "float32"
         }
       }

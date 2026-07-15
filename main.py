@@ -36,16 +36,23 @@ async def main_async():
                 'payload': { 'width': 640, 'height': 480, 'fps': 30 },
             },
             {
-                'name' : "front",
+                'name' : "right",
                 'driver': "usb_camera",
                 'fingerprint': "/dev/video6",
                 'hardwarename': "UGreen Camera 1080P",
                 'payload': { 'width': 640, 'height': 480, 'fps': 30 },
             },
             {
-                'name' : "header",
+                'name' : "left",
                 'driver': "usb_camera",
                 'fingerprint': "/dev/video8",
+                'hardwarename': "UGreen Camera 1080P",
+                'payload': { 'width': 640, 'height': 480, 'fps': 30 },
+            },
+            {
+                'name' : "head",
+                'driver': "usb_camera",
+                'fingerprint': "/dev/video10",
                 'hardwarename': "USB 2.0 Camera1",
                 'payload': { 'width': 640, 'height': 480, 'fps': 30 },
             }
@@ -69,16 +76,16 @@ async def main_async():
             await asyncio.sleep(1)  # sleep for camera warmup
 
         # initialize robot
-        ROBOT_PORT = '/dev/ttyACM1'
-        robot = LeRobotArmController(port=ROBOT_PORT)
-        robot.connect()
+        #ROBOT_PORT = '/dev/ttyACM1'
+        #robot = LeRobotArmController(port=ROBOT_PORT)
+        #robot.connect()
 
         # initialize model
         MODEL_CONFIG = {
             'model_path': './openvino',
             'backend': 'openvino',
             'policy_name': 'act',
-            'device': 'NPU'
+            'device': 'GPU'
         }
         inference_model = load_inference_model(MODEL_CONFIG)
 
