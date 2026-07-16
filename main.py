@@ -124,7 +124,7 @@ async def main_async():
             inputs['state'] = obs[np.newaxis]  # Add batch dimension: [6] -> [1, 6]
             for cam_name, cam in frame_captures.items():
                 frame = cam.read_latest()
-                inputs[cam_name] = np.ascontiguousarray(frame.data[..., ::-1].transpose(2, 0, 1).astype(np.float32)[np.newaxis] / 255)
+                inputs[cam_name] = np.ascontiguousarray(frame.data.transpose(2, 0, 1).astype(np.float32)[np.newaxis] / 255)
 
             current_inputs = inputs
 

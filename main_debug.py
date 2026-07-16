@@ -87,7 +87,7 @@ async def main_async():
         current_inputs = {}
         inference_busy = [False]  # Use list to allow modification in lambda
 
-        CONTROL_FREQUENCY = 33  # Hz
+        CONTROL_FREQUENCY = 32  # Hz
         ACTION_QUEUE_THRESHOLD = 1
         INFERENCE_DURATION = 20
 
@@ -126,8 +126,8 @@ async def main_async():
                 inputs['state'] = obs[np.newaxis]  # Add batch dimension: [6] -> [1, 6]
                 for cam_name, cam in frame_captures.items():
                     frame = cam.read_latest()
-                    inputs[cam_name] = np.ascontiguousarray(frame.data[..., ::-1].transpose(2, 0, 1).astype(np.float32)[np.newaxis] / 255)
-            
+                    inputs[cam_name] = np.ascontiguousarray(frame.data.transpose(2, 0, 1).astype(np.float32)[np.newaxis] / 255)
+
                 current_inputs = inputs
             elif result_queue.qsize() > 90 and current_inputs:
                 current_inputs = {}
